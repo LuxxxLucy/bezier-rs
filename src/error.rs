@@ -8,6 +8,8 @@ use std::fmt;
 pub enum BezierError {
     /// Error occurred while parsing data
     ParseError(String),
+    /// Error occurred during fit operations
+    FitError(String),
     /// Generic error
     Other(String),
 }
@@ -16,6 +18,7 @@ impl fmt::Display for BezierError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BezierError::ParseError(msg) => write!(f, "Parse error: {}", msg),
+            BezierError::FitError(msg) => write!(f, "Fit error: {}", msg),
             BezierError::Other(msg) => write!(f, "Error: {}", msg),
         }
     }

@@ -5,6 +5,8 @@ A Rust library for working with Bezier curves.
 ## Features
 
 - Data structures for representing Bezier curves (cubic and quadratic segments)
+- Fitting curves
+    - least square method
 ## Usage
 
 ### Basic usage
@@ -70,6 +72,25 @@ let json = r#"[
 ]"#;
 
 let curve = json::parse(json).unwrap();
+```
+
+### Curve fitting
+
+You can fit a Bezier curve to a set of points:
+
+```rust
+use bezier_rs::{modules::fit::least_square_fit, Point};
+
+// Some sample points
+let points = vec![
+    Point::new(0.0, 0.0),
+    Point::new(1.0, 1.5),
+    Point::new(2.0, 1.8),
+    Point::new(3.0, 0.0),
+];
+
+// Fit a cubic Bezier to the points
+let fitted = least_sqaure_fit::fit_cubic_bezier(&points).unwrap();
 ```
 
 ### SVG export
