@@ -95,6 +95,12 @@ impl BezierSegment {
             })
             .collect()
     }
+
+    /// Sample points at specific t values
+    pub fn sample_at_t_values(&self, t_values: &[f64]) -> (Vec<Point>, Vec<f64>) {
+        let points = t_values.iter().map(|&t| self.point_at(t)).collect();
+        (points, t_values.to_vec())
+    }
 }
 
 #[cfg(test)]
