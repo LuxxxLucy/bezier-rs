@@ -26,73 +26,11 @@
 //! let fitted = result.unwrap();
 //! ```
 
+use super::t_heuristic::{estimate_t_values_with_heuristic, THeuristic};
 use crate::data::{BezierSegment, Point};
 use crate::error::{BezierError, BezierResult};
 use crate::{cubic, pt}; // Import macros
 use nalgebra::{DMatrix, DVector};
-
-/// Heuristics for t-parameter estimation used in the least square curve fitting
-///
-/// Essentially we need to come up with some value of the t-parameter, this is done by heuristic.
-/// The default heuristic, the chord length parameterization is the default approach described in:
-/// - Jim Herold's "Least Squares Bezier Fit" blog post
-/// - The "Curve Fitting" chapter of the Bezier primer (https://pomax.github.io/bezierinfo/#curvefitting)
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub enum TParameterizationHeuristic {
-    /// Chord length - t values based on linear distance between points
-    ///
-    /// This assigns t values proportionally to the distance traveled along the polyline
-    /// formed by the input points, producing good parameterization for most curves.
-    #[default]
-    ChordLength,
-}
-
-/// Estimate parameter t values using chord length parameterization
-///
-/// This implementation directly calculates the chord length parameterization as described
-/// in the Bezier primer's Curve Fitting chapter. It assigns t values proportionally to
-/// the distance traveled along the polyline formed by the input points.
-fn estimate_t_values_chord_length(points: &[Point]) -> Vec<f64> {
-    if points.is_empty() {
-        return Vec::new();
-    }
-
-    if points.len() == 1 {
-        return vec![0.0];
-    }
-
-    // Calculate the path length to parameterize the points
-    let mut path_lengths = vec![0.0];
-    let mut total_length = 0.0;
-
-    for i in 1..points.len() {
-        let segment_length = points[i].distance(&points[i - 1]);
-        total_length += segment_length;
-        path_lengths.push(total_length);
-    }
-
-    // Normalize path lengths to get parameter t values
-    path_lengths
-        .iter()
-        .map(|&length| {
-            if total_length > 0.0 {
-                length / total_length
-            } else {
-                0.0
-            }
-        })
-        .collect()
-}
-
-/// Estimate parameter t values using specified heuristic
-fn estimate_t_values_with_heuristic(
-    points: &[Point],
-    heuristic: TParameterizationHeuristic,
-) -> Vec<f64> {
-    match heuristic {
-        TParameterizationHeuristic::ChordLength => estimate_t_values_chord_length(points),
-    }
-}
 
 /// Fit a cubic bezier curve to a set of points using least squares with given t values
 fn least_square_fit_routine(points: &[Point], t_values: &[f64]) -> BezierResult<BezierSegment> {
@@ -254,11 +192,10 @@ mod tests {
         let fitted_segment1 = fit_cubic_bezier_default(&samples).unwrap();
 
         // Manually calculate t values
-        let t_values =
-            estimate_t_values_with_heuristic(&samples, TParameterizationHeuristic::default());
+        let t_values = estimate_t_values_with_heuristic(&samples, THeuristic::default());
 
         // Fit with explicit t values
-        let fitted_segment2 = least_square_fit_routine(&samples, &t_values).unwrap();
+        let fitted_segment2 = least_square_solve_p_given_t(&samples, &t_values).unwrap();
 
         // Test that both methods produce the same result
         let points1 = fitted_segment1.points();
@@ -321,15 +258,14 @@ mod tests {
         let samples = original.sample_points(10);
 
         // Standard chord length parameterization
-        let t_values_chord =
-            estimate_t_values_with_heuristic(&samples, TParameterizationHeuristic::default());
-        let fitted_chord = least_square_fit_routine(&samples, &t_values_chord).unwrap();
+        let t_values_chord = estimate_t_values_with_heuristic(&samples, THeuristic::default());
+        let fitted_chord = least_square_solve_p_given_t(&samples, &t_values_chord).unwrap();
 
         // Try a different parameterization - uniform spacing
         let t_values_uniform: Vec<f64> = (0..samples.len())
             .map(|i| i as f64 / (samples.len() - 1) as f64)
             .collect();
-        let fitted_uniform = least_square_fit_routine(&samples, &t_values_uniform).unwrap();
+        let fitted_uniform = least_square_solve_p_given_t(&samples, &t_values_uniform).unwrap();
 
         // Both should produce valid curves, but they may differ
         // At the very least, endpoints should be the same
