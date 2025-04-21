@@ -33,18 +33,31 @@ use crate::{cubic, pt}; // Import macros
 use nalgebra::{DMatrix, DVector};
 
 /// Fit a cubic bezier curve to a set of points using least squares with given t values
-fn least_square_fit_routine(points: &[Point], t_values: &[f64]) -> BezierResult<BezierSegment> {
-    if points.len() < 4 || points.len() != t_values.len() {
+///
+/// It solves the problem of minimize ||TMP - D||^2
+/// where T is named `ct` in the code which is the polynomial matrix that is constructed from `t`
+/// M is named `cubic_bernstein_matrix` in the code which is the Bernstein matrix,
+/// And D is the input points: &[Point]
+pub fn least_square_solve_p_given_t(
+    points: &[Point],
+    t_values: &[f64],
+) -> BezierResult<BezierSegment> {
+    let n = points.len();
+
+    if n < 4 || n != t_values.len() {
         return Err(BezierError::FitError(
             "At least 4 points are required and number of points must match number of t values"
                 .to_string(),
         ));
     }
 
-    // Create the polynomial matrix CT (n x 4)
-    // Each row is [1, t, t², t³]
-    let mut ct = DMatrix::zeros(points.len(), 4);
-    for i in 0..points.len() {
+    // Create the polynomial matrix ct (n x 4) from `t_values` where each row is [1, t, t², t³]
+    // [ 1, t_0, t_0^2, t_0^3 ]
+    // [ 1, t_1, t_1^2, t_1^3 ]
+    // ...
+    // [ 1, t_n, t_n^2, t_n^3 ]
+    let mut ct = DMatrix::zeros(n, 4);
+    for i in 0..n {
         let t = t_values[i];
         ct[(i, 0)] = 1.0;
         ct[(i, 1)] = t;
@@ -53,7 +66,7 @@ fn least_square_fit_routine(points: &[Point], t_values: &[f64]) -> BezierResult<
     }
 
     // Create the Bernstein matrix B (4 x 4)
-    let b = DMatrix::from_row_slice(
+    let cubic_bernstein_matrix = DMatrix::from_row_slice(
         4,
         4,
         &[
@@ -64,12 +77,14 @@ fn least_square_fit_routine(points: &[Point], t_values: &[f64]) -> BezierResult<
         ],
     );
 
-    // Compose A = CT * B
-    let a = &ct * &b;
+    // Now we are going to convert the formulation into the simple minimize of ||Ax - b ||^2
+    // where A = ct * cubic_bernstein_matrix
+    // b is the input points: &[Point]
+    let a = &ct * &cubic_bernstein_matrix;
 
     // Create vectors for x and y coordinates
-    let b_x = DVector::from_iterator(points.len(), points.iter().map(|p| p.x));
-    let b_y = DVector::from_iterator(points.len(), points.iter().map(|p| p.y));
+    let b_x = DVector::from_iterator(n, points.iter().map(|p| p.x));
+    let b_y = DVector::from_iterator(n, points.iter().map(|p| p.y));
 
     // Calculate the control points using least squares (A^T * A) * x = A^T * b
     let a_t = a.transpose();
@@ -93,34 +108,35 @@ fn least_square_fit_routine(points: &[Point], t_values: &[f64]) -> BezierResult<
     let cy = a_ta_inv * a_tb_y;
 
     // Create bezier segment from control points
-    // Note: The ordering here needs to match the expected ordering for the curve
-    // Let's check if we need to flip the control point ordering to match the original curve
-    let p1 = pt!(cx[3], cy[3]); // First control point
-    let p2 = pt!(cx[2], cy[2]); // Second control point
-    let p3 = pt!(cx[1], cy[1]); // Third control point
-    let p4 = pt!(cx[0], cy[0]); // Fourth control point
+    // this is because we might have reversed the order, so we call `reorder_control_points`
+    let (p1, p2, p3, p4) = reorder_control_points(
+        pt!(cx[0], cy[0]),
+        pt!(cx[1], cy[1]),
+        pt!(cx[2], cy[2]),
+        pt!(cx[3], cy[3]),
+        points.first().unwrap(),
+    );
 
-    // Create the default segment
-    let segment = cubic!([(p1.x, p1.y), (p2.x, p2.y), (p3.x, p3.y), (p4.x, p4.y)]);
+    Ok(cubic!([
+        (p1.x, p1.y),
+        (p2.x, p2.y),
+        (p3.x, p3.y),
+        (p4.x, p4.y)
+    ]))
+}
 
-    // Compare with the original endpoints
-    let start_point = points.first().unwrap();
-
-    // Check if the orientation of the fitted curve matches the original points
-    let start_dist_to_p1 = start_point.distance(&p1);
-    let start_dist_to_p4 = start_point.distance(&p4);
-
-    // If the start point is closer to p4 than to p1, flip the control points
-    if start_dist_to_p4 < start_dist_to_p1 {
-        return Ok(cubic!([
-            (p4.x, p4.y),
-            (p3.x, p3.y),
-            (p2.x, p2.y),
-            (p1.x, p1.y)
-        ]));
+/// Reorders control points to match the start point
+fn reorder_control_points(
+    p1: Point,
+    p2: Point,
+    p3: Point,
+    p4: Point,
+    start_point: &Point,
+) -> (Point, Point, Point, Point) {
+    if start_point.distance(&p4) < start_point.distance(&p1) {
+        return (p4, p3, p2, p1);
     }
-
-    Ok(segment)
+    (p1, p2, p3, p4)
 }
 
 /// Fit a cubic bezier curve to a set of points using least squares
@@ -128,17 +144,25 @@ fn least_square_fit_routine(points: &[Point], t_values: &[f64]) -> BezierResult<
 /// This implementation uses the chord length parameterization for t-value estimation
 /// as described in Jim Herold's blog post and the Bezier primer's Curve Fitting chapter.
 pub fn fit_cubic_bezier_default(points: &[Point]) -> BezierResult<BezierSegment> {
+    fit_cubic_bezier_with_heuristic(points, THeuristic::default())
+}
+
+/// Fit a cubic bezier curve to a set of points using least squares with specified heuristic
+pub fn fit_cubic_bezier_with_heuristic(
+    points: &[Point],
+    heuristic: THeuristic,
+) -> BezierResult<BezierSegment> {
     if points.len() < 4 {
         return Err(BezierError::FitError(
             "At least 4 points are required for cubic bezier fitting".to_string(),
         ));
     }
 
-    // Estimate t values using the chord length parameterization
-    let t_value = estimate_t_values_with_heuristic(points, TParameterizationHeuristic::default());
+    // Estimate t values using the specified heuristic
+    let t_values = estimate_t_values_with_heuristic(points, heuristic);
 
-    // Perform the least squares fitting with the estimated t values
-    least_square_fit_routine(points, &t_value)
+    // solve P given T
+    least_square_solve_p_given_t(points, &t_values)
 }
 
 #[cfg(test)]
