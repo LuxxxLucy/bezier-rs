@@ -17,7 +17,7 @@ fn test_complete_workflow() {
     println!("Sampled {} points from the curve", samples.len());
 
     // 3. Fit a curve to the sampled points
-    let fitted = least_square_fit::fit_cubic_bezier(&samples).unwrap();
+    let fitted = least_square_fit::fit_cubic_bezier_default(&samples).unwrap();
 
     // 4. Export both to SVG
     let width = 300;
