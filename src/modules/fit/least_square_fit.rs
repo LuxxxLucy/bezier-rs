@@ -103,15 +103,31 @@ fn least_square_fit_routine(points: &[Point], t_values: &[f64]) -> BezierResult<
         ));
     }
 
-    // For each point, calculate the basis function values
-    let mut a = DMatrix::zeros(points.len(), 4);
+    // Create the polynomial matrix CT (n x 4)
+    // Each row is [1, t, t², t³]
+    let mut ct = DMatrix::zeros(points.len(), 4);
     for i in 0..points.len() {
         let t = t_values[i];
-        a[(i, 0)] = (1.0 - t).powi(3);
-        a[(i, 1)] = 3.0 * t * (1.0 - t).powi(2);
-        a[(i, 2)] = 3.0 * t.powi(2) * (1.0 - t);
-        a[(i, 3)] = t.powi(3);
+        ct[(i, 0)] = 1.0;
+        ct[(i, 1)] = t;
+        ct[(i, 2)] = t.powi(2);
+        ct[(i, 3)] = t.powi(3);
     }
+
+    // Create the Bernstein matrix B (4 x 4)
+    let b = DMatrix::from_row_slice(
+        4,
+        4,
+        &[
+            1.0, 0.0, 0.0, 0.0, //  1  0  0  0
+            -3.0, 3.0, 0.0, 0.0, // -3  3  0  0
+            3.0, -6.0, 3.0, 0.0, //  3 -6  3  0
+            -1.0, 3.0, -3.0, 1.0, // -1  3 -3  1
+        ],
+    );
+
+    // Compose A = CT * B
+    let a = &ct * &b;
 
     // Create vectors for x and y coordinates
     let b_x = DVector::from_iterator(points.len(), points.iter().map(|p| p.x));
@@ -122,8 +138,6 @@ fn least_square_fit_routine(points: &[Point], t_values: &[f64]) -> BezierResult<
     let a_ta = &a_t * &a;
 
     // Compute the inverse or pseudo-inverse of a_ta
-    // For simplicity, we'll use a direct matrix inverse here
-    // In a production system, you might want to use SVD or another method
     let a_ta_inv = match a_ta.try_inverse() {
         Some(inv) => inv,
         None => {
