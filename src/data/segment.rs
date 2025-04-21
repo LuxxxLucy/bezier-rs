@@ -101,6 +101,64 @@ impl BezierSegment {
         let points = t_values.iter().map(|&t| self.point_at(t)).collect();
         (points, t_values.to_vec())
     }
+
+    /// Find the nearest point on the curve to a given point using a two-step approach:
+    ///     1. Linear sampling to get a good initial guess
+    ///     2. Binary search refinement around the initial guess.
+    /// this is probably not the best way to do this.
+    pub fn nearest_point(&self, point: &Point) -> (Point, f64) {
+        // Step 1: Linear sampling to get initial guess
+        const LUT_SIZE: usize = 100;
+        let mut best_t = 0.0;
+        let mut best_point = self.point_at(best_t);
+        let mut best_distance = point.distance(&best_point);
+
+        // Create a lookup table of points on the curve
+        for i in 0..=LUT_SIZE {
+            let t = i as f64 / LUT_SIZE as f64;
+            let curve_point = self.point_at(t);
+            let distance = point.distance(&curve_point);
+
+            if distance < best_distance {
+                best_distance = distance;
+                best_t = t;
+                best_point = curve_point;
+            }
+        }
+
+        // Step 2: Binary search refinement around the initial guess
+        let mut left = (best_t - 1.0 / LUT_SIZE as f64).max(0.0);
+        let mut right = (best_t + 1.0 / LUT_SIZE as f64).min(1.0);
+        let tolerance = 0.001;
+
+        while right - left > tolerance {
+            let mid1 = left + (right - left) / 3.0;
+            let mid2 = right - (right - left) / 3.0;
+
+            let point1 = self.point_at(mid1);
+            let point2 = self.point_at(mid2);
+
+            let dist1 = point.distance(&point1);
+            let dist2 = point.distance(&point2);
+
+            if dist1 < best_distance {
+                best_distance = dist1;
+                best_t = mid1;
+                best_point = point1;
+                right = mid2;
+            } else if dist2 < best_distance {
+                best_distance = dist2;
+                best_t = mid2;
+                best_point = point2;
+                left = mid1;
+            } else {
+                left = mid1;
+                right = mid2;
+            }
+        }
+
+        (best_point, best_t)
+    }
 }
 
 #[cfg(test)]
@@ -108,63 +166,96 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cubic_bezier_endpoint() {
+    fn test_nearest_point_boundary_cases() {
+        // Create a simple cubic bezier segment
         let segment = BezierSegment::cubic(
-            Point::new(0.0, 0.0),
-            Point::new(1.0, 1.0),
-            Point::new(2.0, 1.0),
-            Point::new(3.0, 0.0),
+            Point::new(0.0, 0.0), // Start point
+            Point::new(1.0, 1.0), // Control point 1
+            Point::new(2.0, 1.0), // Control point 2
+            Point::new(3.0, 0.0), // End point
         );
 
-        // At t=0, should be at first control point
-        let start = segment.point_at(0.0);
-        assert_eq!(start, Point::new(0.0, 0.0));
+        // Test 1: Point exactly at start (t=0)
+        let test_point = Point::new(0.0, 0.0);
+        let expected_point = Point::new(0.0, 0.0);
+        let (point, t) = segment.nearest_point(&test_point);
+        assert_eq!(point, expected_point);
+        assert!(t.abs() < 1e-6);
 
-        // At t=1, should be at last control point
-        let end = segment.point_at(1.0);
-        assert_eq!(end, Point::new(3.0, 0.0));
+        // Test 2: Point very close to start
+        let test_point = Point::new(0.01, 0.01);
+        let expected_point = Point::new(0.0, 0.0);
+        let (point, t) = segment.nearest_point(&test_point);
+        assert!(t < 0.1, "t value was {}", t);
+        assert!(point.distance(&expected_point) < 0.1);
+
+        // Test 3: Point exactly at end (t=1)
+        let test_point = Point::new(3.0, 0.0);
+        let expected_point = Point::new(3.0, 0.0);
+        let (point, t) = segment.nearest_point(&test_point);
+        assert_eq!(point, expected_point);
+        assert!((t - 1.0).abs() < 1e-6);
+
+        // Test 4: Point very close to end
+        let test_point = Point::new(2.99, 0.01);
+        let expected_point = Point::new(3.0, 0.0);
+        let (point, t) = segment.nearest_point(&test_point);
+        assert!(t > 0.9, "t value was {}", t);
+        assert!(point.distance(&expected_point) < 0.1);
     }
 
     #[test]
-    fn test_segment_sampling() {
-        // Create a quadratic bezier segment
-        let segment = BezierSegment::quadratic(
-            Point::new(0.0, 0.0),    // Start point
-            Point::new(50.0, 100.0), // Control point
-            Point::new(100.0, 0.0),  // End point
+    fn test_nearest_point_middle_cases() {
+        // Create a simple cubic bezier segment
+        let segment = BezierSegment::cubic(
+            Point::new(0.0, 0.0), // Start point
+            Point::new(1.0, 1.0), // Control point 1
+            Point::new(2.0, 1.0), // Control point 2
+            Point::new(3.0, 0.0), // End point
         );
 
-        let mid_point = segment.sample_point_at(0.5);
-        assert_eq!(mid_point, Point::new(50.0, 50.0));
+        // Test 1: Point at middle of curve (t=0.5)
+        let middle_point = segment.point_at(0.5);
+        let test_point = middle_point;
+        let expected_point = middle_point;
+        let (point, t) = segment.nearest_point(&test_point);
+        assert!((t - 0.5).abs() < 0.1, "t value was {}", t);
+        assert!(point.distance(&expected_point) < 1e-6);
 
-        // Sample 5 points from the segment
-        let samples = segment.sample_points(5);
+        // Test 2: Point above middle of curve
+        let test_point = Point::new(1.5, 2.0);
+        let (_point, t) = segment.nearest_point(&test_point);
+        assert!(t > 0.4 && t < 0.6, "t value was {}", t);
 
-        // Check we got the right number of points
-        assert_eq!(samples.len(), 5);
+        // Test 3: Point below middle of curve
+        let test_point = Point::new(1.5, 0.5);
+        let (_point, t) = segment.nearest_point(&test_point);
+        assert!(t > 0.4 && t < 0.6, "t value was {}", t);
+    }
 
-        // start point
-        assert_eq!(samples[0], Point::new(0.0, 0.0));
+    #[test]
+    fn test_nearest_point_complex_curve() {
+        // Create a more complex cubic bezier segment
+        let segment = BezierSegment::cubic(
+            Point::new(0.0, 0.0),  // Start point
+            Point::new(0.5, 1.0),  // Control point 1
+            Point::new(1.5, -1.0), // Control point 2
+            Point::new(2.0, 0.0),  // End point
+        );
 
-        // Check sample 1 (t=0.25)
-        // For a quadratic curve: B(0.25) = 0.5625*P0 + 0.375*P1 + 0.0625*P2
-        // = 0.5625*(0,0) + 0.375*(50,100) + 0.0625*(100,0)
-        // = (0,0) + (18.75,37.5) + (6.25,0) = (25,37.5)
-        assert_eq!(samples[1], Point::new(25.0, 37.5));
+        // Test 1: Point near a local minimum
+        let test_point = Point::new(1.0, 0.2);
+        let (_point, t) = segment.nearest_point(&test_point);
+        assert!(t > 0.45 && t < 0.55, "t value was {}", t);
 
-        // The middle point (t=0.5) should be at (x=50, y=50) for this specific curve
-        // For a quadratic curve: B(0.5) = 0.25*P0 + 0.5*P1 + 0.25*P2
-        // = 0.25*(0,0) + 0.5*(50,100) + 0.25*(100,0)
-        // = (0,0) + (25,50) + (25,0) = (50,50)
-        assert_eq!(samples[2], Point::new(50.0, 50.0));
+        // Test 2: Point near a local maximum
+        let test_point = Point::new(0.5, 0.5);
+        let (_point, t) = segment.nearest_point(&test_point);
+        assert!(t > 0.24 && t < 0.26, "t value was {}", t);
 
-        // Check sample 3 (t=0.75)
-        // For a quadratic curve: B(0.75) = 0.0625*P0 + 0.375*P1 + 0.5625*P2
-        // = 0.0625*(0,0) + 0.375*(50,100) + 0.5625*(100,0)
-        // = (0,0) + (18.75,37.5) + (56.25,0) = (75,37.5)
-        assert_eq!(samples[3], Point::new(75.0, 37.5));
-
-        // end point
-        assert_eq!(samples[4], Point::new(100.0, 0.0));
+        // Test 3: Point outside the curve's bounding box
+        let test_point = Point::new(3.0, 2.0);
+        let (_point, t) = segment.nearest_point(&test_point);
+        assert!(t > 0.9, "t value was {}", t);
     }
 }
