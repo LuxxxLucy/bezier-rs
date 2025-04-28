@@ -1,9 +1,9 @@
 //! Fitting bezier curves to a set of points using the least squares method
 //!
 //! Based on "Least Squares Bezier Fit" by Jim Herold
-//! https://web.archive.org/web/20180403213813/http://jimherold.com/2012/04/20/least-squares-bezier-fit/
+//! <https://web.archive.org/web/20180403213813/http://jimherold.com/2012/04/20/least-squares-bezier-fit/>
 //!
-//! Altenatively see bezier primer chap 35 Curve fitting https://pomax.github.io/bezierinfo/#curvefitting
+//! Altenatively see bezier primer chap 35 Curve fitting <https://pomax.github.io/bezierinfo/#curvefitting>
 //!
 //! This approach would rely on a heuristic of guessing the `t` parameter and then apply a least
 //! square solving procedure.

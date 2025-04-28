@@ -1,3 +1,5 @@
+//! Heuristics for t-parameter estimation used in the least square curve fitting
+
 use crate::data::Point;
 
 /// Heuristics for t-parameter estimation used in the least square curve fitting
@@ -12,7 +14,7 @@ pub enum THeuristic {
 
     /// Uniform spacing - t values are evenly distributed
     ///
-    /// This assigns t values uniformly in [0,1], which works well for evenly spaced points
+    /// This assigns t values uniformly in \[0,1\], which works well for evenly spaced points
     /// but may perform poorly for unevenly distributed points.
     Uniform,
 
