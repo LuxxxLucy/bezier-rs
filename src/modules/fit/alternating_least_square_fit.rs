@@ -168,6 +168,15 @@ fn update_t_values_gauss_newton(
     new_t_values
 }
 
+/// Check if all sample points are within tolerance distance of the fitted curve
+/// Returns true if all distances are below tolerance, false otherwise
+fn all_points_within_tolerance(segment: &BezierSegment, points: &[Point], tolerance: f64) -> bool {
+    points.iter().all(|point| {
+        let (nearest_point, _) = segment.nearest_point(point);
+        point.distance(&nearest_point) <= tolerance
+    })
+}
+
 pub fn fit_cubic_bezier_alternating(
     points: &[Point],
     max_iterations: usize,
@@ -193,31 +202,22 @@ pub fn fit_cubic_bezier_alternating(
     let mut t_values = estimate_t_values_with_heuristic(points, THeuristic::ChordLength);
     let mut segment = least_square_solve_p_given_t(points, &t_values)?;
 
-    // If max_iterations is 0, return the initial curve resulted in the first linear problem
-    // solution
+    // If max_iterations is 0, return the initial curve
     if max_iterations == 0 {
         return Ok(segment);
     }
 
     // Iterate until convergence or max iterations
     for _ in 0..max_iterations {
+        // Check if current fit is good enough, if so, return the current curve results
+        if all_points_within_tolerance(&segment, points, tolerance) {
+            break;
+        }
+
         let new_t_values = match update_method {
             TUpdateMethod::NearestPoint => update_t_values_nearest_point(&segment, points),
             TUpdateMethod::GaussNewton => update_t_values_gauss_newton(&segment, points, &t_values),
         };
-
-        // Check if t values have converged
-        let mut max_change = 0.0;
-        for (old_t, new_t) in t_values.iter().zip(new_t_values.iter()) {
-            let change = (old_t - new_t).abs();
-            if change > max_change {
-                max_change = change;
-            }
-        }
-
-        if max_change < tolerance {
-            break;
-        }
 
         t_values = new_t_values;
         segment = least_square_solve_p_given_t(points, &t_values)?;
