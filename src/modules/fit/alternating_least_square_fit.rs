@@ -76,26 +76,21 @@ fn update_t_values_nearest_point(segment: &BezierSegment, points: &[Point]) -> V
 
 /// Update t values using Gauss-Newton method
 fn update_t_values_gauss_newton(
-    segment: &BezierSegment,
     points: &[Point],
     t_values: &[f64],
-) -> Vec<f64> {
-    // We want to minimize the squared residuals: E = Σ‖B(t_i) - p_i‖²
-    // Using Gauss-Newton iteration: Δt = -(JᵀJ)⁻¹Jᵀr
-    // Where:
-    // - J is Jacobian matrix of residuals w.r.t t
-    // - r is residual vector [B_x(t_i)-x_i, B_y(t_i)-y_i]ᵀ
+    segment: &BezierSegment,
+) -> BezierResult<Vec<f64>> {
+    let delta_t = get_delta_t(points, t_values, segment)?;
+    Ok(t_values
+        .iter()
+        .zip(delta_t.iter())
+        .map(|(&t, &dt)| (t + dt).clamp(0.0, 1.0))
+        .collect())
+}
 
-    let n = points.len();
-    let control_points = segment.points();
-
-    // Convert control points to nalgebra format
-    let p_x: Vec<f64> = control_points.iter().map(|p| p.x).collect();
-    let p_y: Vec<f64> = control_points.iter().map(|p| p.y).collect();
-    let p_x = DVector::from_vec(p_x);
-    let p_y = DVector::from_vec(p_y);
-
-    // 1. Compute polynomial basis matrix CT (n x 4) of [1   t   t²   t³] for each t value (each row)
+/// Compute the polynomial basis matrix CT (n x 4) of [1   t   t²   t³] for each t value
+pub fn compute_polynomial_basis(t_values: &[f64]) -> DMatrix<f64> {
+    let n = t_values.len();
     let mut ct = DMatrix::zeros(n, 4);
     for i in 0..n {
         let t = t_values[i];
@@ -104,20 +99,12 @@ fn update_t_values_gauss_newton(
         ct[(i, 2)] = t.powi(2);
         ct[(i, 3)] = t.powi(3);
     }
+    ct
+}
 
-    // 2. Bernstein basis matrix B (4x4) this is a constant.
-    let bernstein_matrix = DMatrix::from_row_slice(
-        4,
-        4,
-        &[
-            1.0, 0.0, 0.0, 0.0, // 1, 0, 0, 0
-            -3.0, 3.0, 0.0, 0.0, // -3, 3, 0, 0
-            3.0, -6.0, 3.0, 0.0, // 3, -6, 3, 0
-            -1.0, 3.0, -3.0, 1.0, // -1, 3, -3, 1
-        ],
-    );
-
-    // 3. Compute derivative of basis matrix dCT/dt = [0  1   2t   3t²]
+/// Compute the derivative of polynomial basis matrix dCT/dt = [0  1   2t   3t²]
+pub fn compute_polynomial_basis_derivative(t_values: &[f64]) -> DMatrix<f64> {
+    let n = t_values.len();
     let mut ct_derivative = DMatrix::zeros(n, 4);
     for i in 0..n {
         let t = t_values[i];
@@ -126,14 +113,42 @@ fn update_t_values_gauss_newton(
         ct_derivative[(i, 2)] = 2.0 * t;
         ct_derivative[(i, 3)] = 3.0 * t.powi(2);
     }
+    ct_derivative
+}
 
-    // 4. Compute position and derivative matrices
-    // A = CT * B
-    // A' = dCT/dt * B
-    let a = &ct * &bernstein_matrix;
-    let a_derivative = &ct_derivative * &bernstein_matrix;
+/// Compute the Bernstein basis matrix B (4x4)
+pub fn compute_bernstein_basis() -> DMatrix<f64> {
+    DMatrix::from_row_slice(
+        4,
+        4,
+        &[
+            1.0, 0.0, 0.0, 0.0, // 1, 0, 0, 0
+            -3.0, 3.0, 0.0, 0.0, // -3, 3, 0, 0
+            3.0, -6.0, 3.0, 0.0, // 3, -6, 3, 0
+            -1.0, 3.0, -3.0, 1.0, // -1, 3, -3, 1
+        ],
+    )
+}
 
-    // 5. Compute residual vector r = [B(t_i) - x_i, B(t_i) - y_i]ᵀ
+/// Compute the residual vector r = [B(t_i) - x_i, B(t_i) - y_i]ᵀ
+pub fn compute_residual(
+    points: &[Point],
+    t_values: &[f64],
+    segment: &BezierSegment,
+) -> DVector<f64> {
+    let n = points.len();
+    let control_points = segment.points();
+    let p_x: Vec<f64> = control_points.iter().map(|p| p.x).collect();
+    let p_y: Vec<f64> = control_points.iter().map(|p| p.y).collect();
+    let p_x = DVector::from_vec(p_x);
+    let p_y = DVector::from_vec(p_y);
+
+    // Compute polynomial basis and Bernstein matrix
+    let ct = compute_polynomial_basis(t_values);
+    let bernstein_matrix = compute_bernstein_basis();
+    let a = ct * bernstein_matrix;
+
+    // Compute residual vector
     let mut residual = DVector::zeros(2 * n);
     for i in 0..n {
         let predicted_x = (a.row(i) * &p_x)[0];
@@ -142,30 +157,64 @@ fn update_t_values_gauss_newton(
         residual[2 * i + 1] = predicted_y - points[i].y;
     }
 
-    // 6. Construct Jacobian matrix J = ∂r/∂t
-    // J_ij = ∂r_i/∂t_j = [dB_x(t_j)/dt, dB_y(t_j)/dt] at point i
-    let mut jacobian = DMatrix::zeros(2 * n, n);
+    residual
+}
+
+/// Compute the Jacobian matrix J
+fn compute_jacobian(
+    points: &[Point],
+    t_values: &[f64],
+    segment: &BezierSegment,
+) -> (DMatrix<f64>, DVector<f64>) {
+    let n = points.len();
+    let control_points = segment.points();
+    let p_x: Vec<f64> = control_points.iter().map(|p| p.x).collect();
+    let p_y: Vec<f64> = control_points.iter().map(|p| p.y).collect();
+    let p_x = DVector::from_vec(p_x);
+    let p_y = DVector::from_vec(p_y);
+
+    // Compute polynomial basis derivative and Bernstein matrix
+    let ct_derivative = compute_polynomial_basis_derivative(t_values);
+    let bernstein_matrix = compute_bernstein_basis();
+
+    // Compute derivative matrix
+    let a_derivative = &ct_derivative * &bernstein_matrix;
+
+    // Compute JᵀJ and Jᵀr directly without forming the full Jacobian
+    let mut jtj = DMatrix::zeros(n, n);
+    let mut jtr = DVector::zeros(n);
+
     for i in 0..n {
         let derivative_x = (a_derivative.row(i) * &p_x)[0];
         let derivative_y = (a_derivative.row(i) * &p_y)[0];
-        jacobian[(2 * i, i)] = derivative_x;
-        jacobian[(2 * i + 1, i)] = derivative_y;
+
+        // JᵀJ is diagonal since each t_i only affects its own residual
+        jtj[(i, i)] = derivative_x.powi(2) + derivative_y.powi(2);
+
+        // Jᵀr
+        let residual = compute_residual(points, t_values, segment);
+        jtr[i] = derivative_x * residual[2 * i] + derivative_y * residual[2 * i + 1];
     }
 
-    // 7. Solve Gauss-Newton normal equations: (JᵀJ)ΔT = -Jᵀr
-    let jacobian_transpose = jacobian.transpose();
-    let jtj = &jacobian_transpose * &jacobian;
-    let jtr = &jacobian_transpose * residual;
-    let delta_t = -jtj.lu().solve(&jtr).unwrap();
+    (jtj, jtr)
+}
 
-    // 8. Update t values and ensure they stay in [0,1]
-    let new_t_values: Vec<f64> = t_values
-        .iter()
-        .zip(delta_t.iter())
-        .map(|(&t, &dt)| (t + dt).clamp(0.0, 1.0))
-        .collect();
+/// Compute the step direction ΔT for updating t-values
+pub fn get_delta_t(
+    points: &[Point],
+    t_values: &[f64],
+    segment: &BezierSegment,
+) -> BezierResult<Vec<f64>> {
+    let (jtj, jtr) = compute_jacobian(points, t_values, segment);
 
-    new_t_values
+    // Solve (JᵀJ)ΔT = -Jᵀr
+    let delta_t = -jtj.lu().solve(&jtr).ok_or_else(|| {
+        BezierError::FitError(
+            "Failed to solve linear system for getting the Gauss-Newton Delta t".to_string(),
+        )
+    })?;
+
+    Ok(delta_t.data.into())
 }
 
 /// Check if all sample points are within tolerance distance of the fitted curve
@@ -177,21 +226,20 @@ fn all_points_within_tolerance(segment: &BezierSegment, points: &[Point], tolera
     })
 }
 
+/// Alternating optimization algorithm:
+/// 1. Initialize t_i using chord length parameterization
+///    t_i = (Σ_{k=1}^i ‖p_k - p_{k-1}‖) / total_length
+/// 2. Solve for control points P given fixed t_i:
+///    P = argminₚ Σ‖B(t_i; P) - p_i‖² = (AᵀA)⁻¹AᵀD
+/// 3. Update t_i given fixed control points P:
+///    t_i = argmin_t ‖B(t; P) - p_i‖² this done by either nearest point or gauss newton
+/// 4. Repeat until convergence
 pub fn fit_cubic_bezier_alternating(
     points: &[Point],
     max_iterations: usize,
     tolerance: f64,
     update_method: TUpdateMethod,
 ) -> BezierResult<BezierSegment> {
-    // Alternating optimization algorithm:
-    // 1. Initialize t_i using chord length parameterization
-    //    t_i = (Σ_{k=1}^i ‖p_k - p_{k-1}‖) / total_length
-    // 2. Solve for control points P given fixed t_i:
-    //    P = argminₚ Σ‖B(t_i; P) - p_i‖² = (AᵀA)⁻¹AᵀD
-    // 3. Update t_i given fixed control points P:
-    //    t_i = argmin_t ‖B(t; P) - p_i‖²
-    // 4. Repeat until convergence
-
     if points.len() < 4 {
         return Err(BezierError::FitError(
             "At least 4 points are required for cubic bezier fitting".to_string(),
@@ -216,7 +264,9 @@ pub fn fit_cubic_bezier_alternating(
 
         let new_t_values = match update_method {
             TUpdateMethod::NearestPoint => update_t_values_nearest_point(&segment, points),
-            TUpdateMethod::GaussNewton => update_t_values_gauss_newton(&segment, points, &t_values),
+            TUpdateMethod::GaussNewton => {
+                update_t_values_gauss_newton(points, &t_values, &segment)?
+            }
         };
 
         t_values = new_t_values;
