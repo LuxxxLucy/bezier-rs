@@ -50,7 +50,7 @@
 use crate::data::{BezierSegment, Point};
 use crate::error::{BezierError, BezierResult};
 use crate::modules::fit::least_square_fit_common::{
-    all_points_within_tolerance, get_delta_t, least_square_solve_p_given_t,
+    adjust_t_values, all_points_within_tolerance, get_delta_t, least_square_solve_p_given_t,
 };
 use crate::modules::fit::t_heuristic::{estimate_t_values_with_heuristic, THeuristic};
 
@@ -82,11 +82,13 @@ fn update_t_values_gauss_newton(
     segment: &BezierSegment,
 ) -> BezierResult<Vec<f64>> {
     let delta_t = get_delta_t(points, t_values, segment)?;
-    Ok(t_values
+    let new_t_values = t_values
         .iter()
         .zip(delta_t.iter())
         .map(|(&t, &dt)| (t + dt).clamp(0.0, 1.0))
-        .collect())
+        .collect::<Vec<f64>>();
+    // adjust the t values to ensure the first t is 0 and the last t is 1
+    Ok(adjust_t_values(&new_t_values))
 }
 
 /// Alternating optimization algorithm:

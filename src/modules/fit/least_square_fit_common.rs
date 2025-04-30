@@ -132,6 +132,16 @@ pub fn get_delta_t(
     Ok(delta_t.data.into())
 }
 
+/// Adjust and ensure the first t is always 0 and the last t is always 1
+pub fn adjust_t_values(t_values: &[f64]) -> Vec<f64> {
+    // Force first t-value to 0 and last t-value to 1
+    let n = t_values.len();
+    let mut adjusted_t_values = t_values.to_vec();
+    adjusted_t_values[0] = 0.0;
+    adjusted_t_values[n - 1] = 1.0;
+    adjusted_t_values
+}
+
 /// Fit a cubic bezier curve to a set of points using least squares with given t values
 pub fn least_square_solve_p_given_t(
     points: &[Point],
