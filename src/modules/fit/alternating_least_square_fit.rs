@@ -49,9 +49,10 @@
 //! ```
 use crate::data::{BezierSegment, Point};
 use crate::error::{BezierError, BezierResult};
-use crate::modules::fit::least_square_fit::least_square_solve_p_given_t;
+use crate::modules::fit::least_square_fit_common::{
+    all_points_within_tolerance, get_delta_t, least_square_solve_p_given_t,
+};
 use crate::modules::fit::t_heuristic::{estimate_t_values_with_heuristic, THeuristic};
-use nalgebra::{DMatrix, DVector};
 
 /// Methods for updating t values in alternating least squares fit
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -86,144 +87,6 @@ fn update_t_values_gauss_newton(
         .zip(delta_t.iter())
         .map(|(&t, &dt)| (t + dt).clamp(0.0, 1.0))
         .collect())
-}
-
-/// Compute the polynomial basis matrix CT (n x 4) of [1   t   t²   t³] for each t value
-pub fn compute_polynomial_basis(t_values: &[f64]) -> DMatrix<f64> {
-    let n = t_values.len();
-    let mut ct = DMatrix::zeros(n, 4);
-    for i in 0..n {
-        let t = t_values[i];
-        ct[(i, 0)] = 1.0;
-        ct[(i, 1)] = t;
-        ct[(i, 2)] = t.powi(2);
-        ct[(i, 3)] = t.powi(3);
-    }
-    ct
-}
-
-/// Compute the derivative of polynomial basis matrix dCT/dt = [0  1   2t   3t²]
-pub fn compute_polynomial_basis_derivative(t_values: &[f64]) -> DMatrix<f64> {
-    let n = t_values.len();
-    let mut ct_derivative = DMatrix::zeros(n, 4);
-    for i in 0..n {
-        let t = t_values[i];
-        ct_derivative[(i, 0)] = 0.0;
-        ct_derivative[(i, 1)] = 1.0;
-        ct_derivative[(i, 2)] = 2.0 * t;
-        ct_derivative[(i, 3)] = 3.0 * t.powi(2);
-    }
-    ct_derivative
-}
-
-/// Compute the Bernstein basis matrix B (4x4)
-pub fn compute_bernstein_basis() -> DMatrix<f64> {
-    DMatrix::from_row_slice(
-        4,
-        4,
-        &[
-            1.0, 0.0, 0.0, 0.0, // 1, 0, 0, 0
-            -3.0, 3.0, 0.0, 0.0, // -3, 3, 0, 0
-            3.0, -6.0, 3.0, 0.0, // 3, -6, 3, 0
-            -1.0, 3.0, -3.0, 1.0, // -1, 3, -3, 1
-        ],
-    )
-}
-
-/// Compute the residual vector r = [B(t_i) - x_i, B(t_i) - y_i]ᵀ
-pub fn compute_residual(
-    points: &[Point],
-    t_values: &[f64],
-    segment: &BezierSegment,
-) -> DVector<f64> {
-    let n = points.len();
-    let control_points = segment.points();
-    let p_x: Vec<f64> = control_points.iter().map(|p| p.x).collect();
-    let p_y: Vec<f64> = control_points.iter().map(|p| p.y).collect();
-    let p_x = DVector::from_vec(p_x);
-    let p_y = DVector::from_vec(p_y);
-
-    // Compute polynomial basis and Bernstein matrix
-    let ct = compute_polynomial_basis(t_values);
-    let bernstein_matrix = compute_bernstein_basis();
-    let a = ct * bernstein_matrix;
-
-    // Compute residual vector
-    let mut residual = DVector::zeros(2 * n);
-    for i in 0..n {
-        let predicted_x = (a.row(i) * &p_x)[0];
-        let predicted_y = (a.row(i) * &p_y)[0];
-        residual[2 * i] = predicted_x - points[i].x;
-        residual[2 * i + 1] = predicted_y - points[i].y;
-    }
-
-    residual
-}
-
-/// Compute the Jacobian matrix J
-fn compute_jacobian(
-    points: &[Point],
-    t_values: &[f64],
-    segment: &BezierSegment,
-) -> (DMatrix<f64>, DVector<f64>) {
-    let n = points.len();
-    let control_points = segment.points();
-    let p_x: Vec<f64> = control_points.iter().map(|p| p.x).collect();
-    let p_y: Vec<f64> = control_points.iter().map(|p| p.y).collect();
-    let p_x = DVector::from_vec(p_x);
-    let p_y = DVector::from_vec(p_y);
-
-    // Compute polynomial basis derivative and Bernstein matrix
-    let ct_derivative = compute_polynomial_basis_derivative(t_values);
-    let bernstein_matrix = compute_bernstein_basis();
-
-    // Compute derivative matrix
-    let a_derivative = &ct_derivative * &bernstein_matrix;
-
-    // Compute JᵀJ and Jᵀr directly without forming the full Jacobian
-    let mut jtj = DMatrix::zeros(n, n);
-    let mut jtr = DVector::zeros(n);
-
-    for i in 0..n {
-        let derivative_x = (a_derivative.row(i) * &p_x)[0];
-        let derivative_y = (a_derivative.row(i) * &p_y)[0];
-
-        // JᵀJ is diagonal since each t_i only affects its own residual
-        jtj[(i, i)] = derivative_x.powi(2) + derivative_y.powi(2);
-
-        // Jᵀr
-        let residual = compute_residual(points, t_values, segment);
-        jtr[i] = derivative_x * residual[2 * i] + derivative_y * residual[2 * i + 1];
-    }
-
-    (jtj, jtr)
-}
-
-/// Compute the step direction ΔT for updating t-values
-pub fn get_delta_t(
-    points: &[Point],
-    t_values: &[f64],
-    segment: &BezierSegment,
-) -> BezierResult<Vec<f64>> {
-    let (jtj, jtr) = compute_jacobian(points, t_values, segment);
-
-    // Solve (JᵀJ)ΔT = -Jᵀr
-    let delta_t = -jtj.lu().solve(&jtr).ok_or_else(|| {
-        BezierError::FitError(
-            "Failed to solve linear system for getting the Gauss-Newton Delta t".to_string(),
-        )
-    })?;
-
-    Ok(delta_t.data.into())
-}
-
-/// Check if all sample points are within tolerance distance of the fitted curve
-/// Returns true if all distances are below tolerance, false otherwise
-fn all_points_within_tolerance(segment: &BezierSegment, points: &[Point], tolerance: f64) -> bool {
-    points.iter().all(|point| {
-        let (nearest_point, _) = segment.nearest_point(point);
-        point.distance(&nearest_point) <= tolerance
-    })
 }
 
 /// Alternating optimization algorithm:
