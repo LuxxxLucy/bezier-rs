@@ -11,3 +11,9 @@ svg = "0.13"
 
 [dev-dependencies]
 approx = "0.5.1"
+
+# draw a comparison of the different least square fit method
+[[bin]]
+name = "bezier-least-square-fit-convergence-comparison-plot"
+path = "experiments/bezier-least-square-fit-convergence-comparison-plot.rs"
+
