@@ -56,6 +56,6 @@ macro_rules! curve {
 #[macro_export]
 macro_rules! curve_from {
     ($segment:expr) => {
-        $crate::data::BezierCurve::from_segment(&$segment)
+        $crate::data::BezierCurve::new(vec![$segment])
     };
 }
