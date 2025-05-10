@@ -20,6 +20,22 @@ pub enum BezierSegment {
         /// Control points: start point, control point, end point
         points: [Point; 3],
     },
+    /// Elliptical arc segment
+    Arc {
+        /// Start point
+        start: Point,
+        /// End point
+        end: Point,
+        /// Radii of the ellipse
+        rx: f64,
+        ry: f64,
+        /// Rotation angle in degrees
+        angle: f64,
+        /// Whether to use the large arc
+        large_arc: bool,
+        /// Whether to sweep clockwise
+        sweep: bool,
+    },
 }
 
 impl BezierSegment {
@@ -42,12 +58,34 @@ impl BezierSegment {
         }
     }
 
+    /// Create an elliptical arc segment
+    pub fn arc(
+        start: Point,
+        end: Point,
+        rx: f64,
+        ry: f64,
+        angle: f64,
+        large_arc: bool,
+        sweep: bool,
+    ) -> Self {
+        Self::Arc {
+            start,
+            end,
+            rx,
+            ry,
+            angle,
+            large_arc,
+            sweep,
+        }
+    }
+
     /// Get all control points for this segment
     pub fn points(&self) -> Vec<Point> {
         match self {
             Self::Line { points } => points.to_vec(),
             Self::Cubic { points } => points.to_vec(),
             Self::Quadratic { points } => points.to_vec(),
+            Self::Arc { start, end, .. } => vec![*start, *end],
         }
     }
 
@@ -94,6 +132,48 @@ impl BezierSegment {
                 // B(t) = (1-t)^2 * p1 + 2(1-t) * t * p2 + t^2 * p3
                 let x = t1.powi(2) * p1.x + 2.0 * t1 * t * p2.x + t.powi(2) * p3.x;
                 let y = t1.powi(2) * p1.y + 2.0 * t1 * t * p2.y + t.powi(2) * p3.y;
+
+                Point::new(x, y)
+            }
+            Self::Arc {
+                start,
+                end,
+                rx,
+                ry,
+                angle,
+                large_arc,
+                sweep,
+            } => {
+                // Convert angle to radians
+                let angle_rad = angle.to_radians();
+
+                // Calculate center point
+                let dx = end.x - start.x;
+                let dy = end.y - start.y;
+
+                // Calculate center point
+                let cx = (start.x + end.x) / 2.0;
+                let cy = (start.y + end.y) / 2.0;
+
+                // Calculate angle between start and end points
+                let theta = dy.atan2(dx);
+
+                // Calculate angle for the arc
+                let phi = if *large_arc {
+                    if *sweep {
+                        theta + std::f64::consts::PI
+                    } else {
+                        theta - std::f64::consts::PI
+                    }
+                } else if *sweep {
+                    theta
+                } else {
+                    theta + std::f64::consts::PI
+                };
+
+                // Calculate point on arc
+                let x = cx + rx * phi.cos() * angle_rad.cos() - ry * phi.sin() * angle_rad.sin();
+                let y = cy + rx * phi.cos() * angle_rad.sin() + ry * phi.sin() * angle_rad.cos();
 
                 Point::new(x, y)
             }
