@@ -58,6 +58,16 @@ impl BezierCurve {
     }
 }
 
+impl fmt::Display for BezierCurve {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "BezierCurve [closed: {}]", self.is_closed)?;
+        for (i, seg) in self.segments.iter().enumerate() {
+            writeln!(f, "  {}: {}", i, seg)?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

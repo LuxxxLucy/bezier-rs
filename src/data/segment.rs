@@ -261,6 +261,45 @@ impl BezierSegment {
     }
 }
 
+impl fmt::Display for BezierSegment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BezierSegment::Line { points } => {
+                write!(f, "Line[{} -> {}]", points[0], points[1])
+            }
+            BezierSegment::Cubic { points } => {
+                write!(
+                    f,
+                    "Cubic[{} -> {} -> {} -> {}]",
+                    points[0], points[1], points[2], points[3]
+                )
+            }
+            BezierSegment::Quadratic { points } => {
+                write!(
+                    f,
+                    "Quadratic[{} -> {} -> {}]",
+                    points[0], points[1], points[2]
+                )
+            }
+            BezierSegment::Arc {
+                start,
+                end,
+                rx,
+                ry,
+                angle,
+                large_arc,
+                sweep,
+            } => {
+                write!(
+                    f,
+                    "Arc[{} -> {}, rx: {:.2}, ry: {:.2}, angle: {:.2}, large_arc: {}, sweep: {}]",
+                    start, end, rx, ry, angle, large_arc, sweep
+                )
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
