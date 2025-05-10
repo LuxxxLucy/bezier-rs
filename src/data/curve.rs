@@ -1,9 +1,11 @@
 //! A Bezier curve: a collection of Bezier segments.
 
+use crate::data::point::Point;
 use crate::data::segment::BezierSegment;
+use std::fmt;
 
 /// A Bezier curve consisting of one or more Bezier segments
-#[derive(Debug, Clone)]
+#[derive(Clone, PartialEq)]
 pub struct BezierCurve {
     /// The segments that make up this curve
     pub segments: Vec<BezierSegment>,
@@ -11,25 +13,46 @@ pub struct BezierCurve {
     is_closed: bool,
 }
 
-impl BezierCurve {
-    // Private helper to check if segments form a closed curve
-    fn is_segments_closed(segments: &[BezierSegment]) -> bool {
-        if segments.is_empty() {
-            panic!("calling `is_segments_closed` on an empty list of segments");
-        }
-        let start_point = segments[0].points()[0];
-        if let Some(last_segment) = segments.last() {
-            if let Some(end_point) = last_segment.points().last() {
-                return start_point == *end_point;
-            }
-        }
-        false
+fn get_first_point(segments: &[BezierSegment]) -> Point {
+    if segments.is_empty() {
+        panic!("calling `get_first_point` on a bezier  empty list of segments");
     }
+    segments[0].points()[0]
+}
 
+fn get_last_point(segments: &[BezierSegment]) -> Point {
+    if segments.is_empty() {
+        panic!("calling `get_last_point` on a bezier  empty list of segments");
+    }
+    if let Some(last_segment) = segments.last() {
+        if let Some(end_point) = last_segment.points().last() {
+            return *end_point;
+        }
+    }
+    panic!("calling `get_last_point` on a bezier curve with no segments");
+}
+
+// Private helper to check if segments form a closed curve
+fn is_segments_closed(segments: &[BezierSegment]) -> bool {
+    if segments.is_empty() {
+        panic!("calling `is_segments_closed` on an empty list of segments");
+    }
+    let start_point = get_first_point(segments);
+    let end_point = get_last_point(segments);
+    start_point == end_point
+}
+
+impl BezierCurve {
     /// Create a new curve from segments, automatically detecting if it's closed.
     /// Returns None if the segments list is empty.
     pub fn new(segments: Vec<BezierSegment>) -> Self {
-        let is_closed = Self::is_segments_closed(&segments);
+        if segments.is_empty() {
+            return Self {
+                segments,
+                is_closed: false,
+            };
+        }
+        let is_closed = is_segments_closed(&segments);
         Self {
             segments,
             is_closed,
@@ -37,15 +60,22 @@ impl BezierCurve {
     }
 
     /// Create a new closed curve from segments, returns None if:
-    /// - The segments list is empty
-    /// - The end point doesn't match the start point
+    /// - The end point doesn't match the start point (for non-empty segments)
     pub fn new_closed(segments: Vec<BezierSegment>) -> Option<Self> {
         if segments.is_empty() {
             return None;
         }
-        if !Self::is_segments_closed(&segments) {
-            return None;
+
+        let mut segments = segments;
+        if !is_segments_closed(&segments) {
+            // add a new segment if line to from last point to the initial point
+            let first_point = get_first_point(&segments);
+            let last_point = get_last_point(&segments);
+            segments.push(BezierSegment::Line {
+                points: [last_point, first_point],
+            });
         }
+
         Some(Self {
             segments,
             is_closed: true,
@@ -72,14 +102,6 @@ impl fmt::Display for BezierCurve {
 mod tests {
     use super::*;
     use crate::quad;
-
-    #[test]
-    #[should_panic]
-    fn test_new_empty_segments() {
-        let empty_curve = BezierCurve::new(vec![]);
-        assert!(empty_curve.segments.is_empty());
-        assert!(!empty_curve.is_closed());
-    }
 
     #[test]
     fn test_new_closed() {

@@ -26,7 +26,7 @@
 //! // Convert the curve to SVG path data
 //! let path_data = cubic_bezier.to_svg_path();
 //!
-//! assert_eq!(path_data, "M50,200 C100,50,200,50,250,200");
+//! assert_eq!(path_data, "M 50,200 C 100,50 200,50 250,200");
 //! ```
 //!
 //! ## Exporting multiple curve segments
@@ -43,7 +43,7 @@
 //! // Convert to SVG path data
 //! let path_data = multi_segment.to_svg_path();
 //!
-//! assert_eq!(path_data, "M10,20 C20,30,30,40,40,50 Q50,60,60,70");
+//! assert_eq!(path_data, "M 10,20 C 20,30 30,40 40,50 Q 50,60 60,70");
 //! ```
 
 use crate::data::{BezierCurve, BezierSegment};
@@ -63,15 +63,28 @@ impl ToSvgPath for BezierCurve {
         let mut result = String::new();
         let mut first = true;
 
-        for segment in &self.segments {
+        for (i, segment) in self.segments.iter().enumerate() {
             match segment {
+                BezierSegment::Line { points } => {
+                    if first {
+                        result.push_str(&format!("M {},{} ", points[0].x, points[0].y));
+                        first = false;
+                    }
+                    if points[1].x == points[0].x {
+                        result.push_str(&format!("V {}", points[1].y));
+                    } else if points[1].y == points[0].y {
+                        result.push_str(&format!("H {}", points[1].x));
+                    } else {
+                        result.push_str(&format!("L {},{}", points[1].x, points[1].y));
+                    }
+                }
                 BezierSegment::Cubic { points } => {
                     if first {
-                        result.push_str(&format!("M{},{}", points[0].x, points[0].y));
+                        result.push_str(&format!("M {},{} ", points[0].x, points[0].y));
                         first = false;
                     }
                     result.push_str(&format!(
-                        " C{},{},{},{},{},{}",
+                        "C {},{} {},{} {},{}",
                         points[1].x,
                         points[1].y,
                         points[2].x,
@@ -82,20 +95,64 @@ impl ToSvgPath for BezierCurve {
                 }
                 BezierSegment::Quadratic { points } => {
                     if first {
-                        result.push_str(&format!("M{},{}", points[0].x, points[0].y));
+                        result.push_str(&format!("M {},{} ", points[0].x, points[0].y));
                         first = false;
                     }
                     result.push_str(&format!(
-                        " Q{},{},{},{}",
+                        "Q {},{} {},{}",
                         points[1].x, points[1].y, points[2].x, points[2].y
                     ));
                 }
+                BezierSegment::Arc {
+                    start,
+                    end,
+                    rx,
+                    ry,
+                    angle,
+                    large_arc,
+                    sweep,
+                } => {
+                    if first {
+                        result.push_str(&format!("M {},{} ", start.x, start.y));
+                        first = false;
+                    }
+                    result.push_str(&format!(
+                        "A {},{} {},{},{} {},{}",
+                        rx,
+                        ry,
+                        angle,
+                        if *large_arc { 1 } else { 0 },
+                        if *sweep { 1 } else { 0 },
+                        end.x,
+                        end.y
+                    ));
+                }
+            }
+            // Add space if not the last segment
+            if i < self.segments.len() - 1 {
+                result.push(' ');
             }
         }
 
         // Add closing command for closed curves
         if self.is_closed() {
-            result.push('Z');
+            // Remove any trailing explicit line-to-start before Z for arc segments
+            if result.ends_with(&format!(
+                " L{},{},{}",
+                self.segments[0].points()[0].x,
+                self.segments[0].points()[0].y,
+                ""
+            )) {
+                let len = result.len();
+                let remove_len = format!(
+                    " L{},{}",
+                    self.segments[0].points()[0].x,
+                    self.segments[0].points()[0].y
+                )
+                .len();
+                result.truncate(len - remove_len);
+            }
+            result.push_str(" Z");
         }
 
         result
@@ -105,6 +162,8 @@ impl ToSvgPath for BezierCurve {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::point::Point;
+    use crate::data::segment::BezierSegment;
     use crate::{cubic, curve, curve_from, quad};
 
     #[test]
@@ -128,12 +187,12 @@ mod tests {
             SvgPathExportTestCase {
                 name: "cubic_segment",
                 curve: curve_from!(cubic!([(10, 20), (20, 30), (30, 40), (40, 50)])),
-                expected_path: "M10,20 C20,30,30,40,40,50",
+                expected_path: "M 10,20 C 20,30 30,40 40,50",
             },
             SvgPathExportTestCase {
                 name: "quadratic_segment",
                 curve: curve_from!(quad!([(10, 20), (40, 50), (70, 80)])),
-                expected_path: "M10,20 Q40,50,70,80",
+                expected_path: "M 10,20 Q 40,50 70,80",
             },
             SvgPathExportTestCase {
                 name: "multi_segment_curve",
@@ -141,7 +200,7 @@ mod tests {
                     cubic!([(10, 20), (20, 30), (30, 40), (40, 50)]),
                     quad!([(40, 50), (50, 60), (60, 70)])
                 ]),
-                expected_path: "M10,20 C20,30,30,40,40,50 Q50,60,60,70",
+                expected_path: "M 10,20 C 20,30 30,40 40,50 Q 50,60 60,70",
             },
         ];
 
@@ -162,9 +221,9 @@ mod tests {
         let path_data = closed.to_svg_path();
 
         // The path data should contain both curves and a closing command
-        assert!(path_data.contains("M10,10 C20,20,40,20,50,10"));
-        assert!(path_data.contains("Q60,0,70,10"));
-        assert!(path_data.contains("Q60,20,10,10"));
+        assert!(path_data.contains("M 10,10 C 20,20 40,20 50,10"));
+        assert!(path_data.contains("Q 60,0 70,10"));
+        assert!(path_data.contains("Q 60,20 10,10"));
         assert!(path_data.ends_with("Z"));
     }
 
@@ -203,10 +262,11 @@ mod tests {
                 .zip(parsed_curve.segments.iter())
                 .enumerate()
             {
-                assert_eq!(
-                    original, parsed,
+                assert!(
+                    original == parsed,
                     "Segment {} mismatch in test case {}",
-                    j, i
+                    j,
+                    i
                 );
             }
 
@@ -218,5 +278,60 @@ mod tests {
                 i
             );
         }
+    }
+
+    #[test]
+    fn test_export_arc_segments() {
+        // Test case 1: Simple arc
+        let curve = BezierCurve::new(vec![BezierSegment::arc(
+            Point::new(10.0, 10.0),
+            Point::new(20.0, 20.0),
+            5.0,
+            5.0,
+            0.0,
+            false,
+            true,
+        )]);
+        assert_eq!(curve.to_svg_path(), "M 10,10 A 5,5 0,0,1 20,20");
+
+        // Test case 2: Arc with rotation and flags
+        let curve = BezierCurve::new(vec![BezierSegment::arc(
+            Point::new(10.0, 10.0),
+            Point::new(20.0, 20.0),
+            5.0,
+            5.0,
+            45.0,
+            true,
+            false,
+        )]);
+        assert_eq!(curve.to_svg_path(), "M 10,10 A 5,5 45,1,0 20,20");
+
+        // Test case 3: Multiple segments including arc
+        let curve = BezierCurve::new(vec![
+            BezierSegment::line(Point::new(10.0, 10.0), Point::new(20.0, 20.0)),
+            BezierSegment::arc(
+                Point::new(20.0, 20.0),
+                Point::new(30.0, 30.0),
+                5.0,
+                5.0,
+                0.0,
+                false,
+                true,
+            ),
+        ]);
+        assert_eq!(curve.to_svg_path(), "M 10,10 L 20,20 A 5,5 0,0,1 30,30");
+
+        // Test case 4: Closed path with arc
+        let curve = BezierCurve::new_closed(vec![BezierSegment::arc(
+            Point::new(10.0, 10.0),
+            Point::new(20.0, 20.0),
+            5.0,
+            5.0,
+            0.0,
+            false,
+            true,
+        )])
+        .unwrap();
+        assert_eq!(curve.to_svg_path(), "M 10,10 A 5,5 0,0,1 20,20 L 10,10 Z");
     }
 }

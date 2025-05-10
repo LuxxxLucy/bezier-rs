@@ -1,9 +1,10 @@
 //! Bezier segment: quadratic or cubic bezier curve segment
 
 use crate::data::point::Point;
+use std::fmt;
 
 /// A bezier segment, either cubic or quadratic
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum BezierSegment {
     /// Line segment with 2 points
     Line {
