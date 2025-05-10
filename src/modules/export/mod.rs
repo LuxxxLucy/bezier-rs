@@ -7,4 +7,5 @@
 //!
 //! - [SVG](svg/index.html) - Export curves and points to SVG format
 
+pub mod json;
 pub mod svg_path;
