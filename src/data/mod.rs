@@ -14,6 +14,7 @@
 //!     - `curve!([segment1, segment2, ...])`: Creates a BezierCurve from a list of segments
 
 pub mod curve;
+pub mod format;
 pub mod macros;
 pub mod point;
 pub mod segment;
