@@ -24,6 +24,12 @@ impl fmt::Display for BezierError {
     }
 }
 
+impl From<serde_json::Error> for BezierError {
+    fn from(err: serde_json::Error) -> Self {
+        BezierError::Other(err.to_string())
+    }
+}
+
 impl Error for BezierError {}
 
 /// Result type that uses BezierError as the error type
