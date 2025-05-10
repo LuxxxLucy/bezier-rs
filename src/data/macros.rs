@@ -37,6 +37,19 @@ macro_rules! quad {
     }};
 }
 
+/// Macro for creating a line segment
+#[macro_export]
+macro_rules! line {
+    ([$($point:expr),*]) => {{
+        let points = [$($point),*];
+        assert_eq!(points.len(), 2, "Line segment requires exactly 2 points");
+        $crate::data::BezierSegment::line(
+            $crate::pt!(points[0].0, points[0].1),
+            $crate::pt!(points[1].0, points[1].1),
+        )
+    }};
+}
+
 /// Macro for creating a Bezier curve from segments
 #[macro_export]
 macro_rules! curve {

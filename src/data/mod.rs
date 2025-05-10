@@ -24,4 +24,4 @@ pub use point::Point;
 pub use segment::BezierSegment;
 
 #[doc(inline)]
-pub use crate::{cubic, curve, curve_from, pt, quad};
+pub use crate::{cubic, curve, curve_from, line, pt, quad};

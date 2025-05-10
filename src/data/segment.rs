@@ -5,6 +5,11 @@ use crate::data::point::Point;
 /// A bezier segment, either cubic or quadratic
 #[derive(Debug, Clone, PartialEq)]
 pub enum BezierSegment {
+    /// Line segment with 2 points
+    Line {
+        /// Points: start point, end point
+        points: [Point; 2],
+    },
     /// Cubic bezier with 4 control points
     Cubic {
         /// Control points: start point, control1, control2, end point
@@ -18,6 +23,11 @@ pub enum BezierSegment {
 }
 
 impl BezierSegment {
+    /// Create a line segment with 2 points
+    pub fn line(p1: Point, p2: Point) -> Self {
+        Self::Line { points: [p1, p2] }
+    }
+
     /// Create a cubic segment with 4 control points
     pub fn cubic(p1: Point, p2: Point, p3: Point, p4: Point) -> Self {
         Self::Cubic {
@@ -35,6 +45,7 @@ impl BezierSegment {
     /// Get all control points for this segment
     pub fn points(&self) -> Vec<Point> {
         match self {
+            Self::Line { points } => points.to_vec(),
             Self::Cubic { points } => points.to_vec(),
             Self::Quadratic { points } => points.to_vec(),
         }
@@ -43,6 +54,15 @@ impl BezierSegment {
     /// Get a point on the bezier curve at parameter t (0 <= t <= 1)
     pub fn point_at(&self, t: f64) -> Point {
         match self {
+            Self::Line { points } => {
+                let p1 = points[0];
+                let p2 = points[1];
+
+                let x = p1.x + t * (p2.x - p1.x);
+                let y = p1.y + t * (p2.y - p1.y);
+
+                Point::new(x, y)
+            }
             Self::Cubic { points } => {
                 let p1 = points[0];
                 let p2 = points[1];
