@@ -137,46 +137,15 @@ impl BezierSegment {
                 Point::new(x, y)
             }
             Self::Arc {
-                start,
-                end,
-                rx,
-                ry,
-                angle,
-                large_arc,
-                sweep,
+                start: _,
+                end: _,
+                rx: _,
+                ry: _,
+                angle: _,
+                large_arc: _,
+                sweep: _,
             } => {
-                // Convert angle to radians
-                let angle_rad = angle.to_radians();
-
-                // Calculate center point
-                let dx = end.x - start.x;
-                let dy = end.y - start.y;
-
-                // Calculate center point
-                let cx = (start.x + end.x) / 2.0;
-                let cy = (start.y + end.y) / 2.0;
-
-                // Calculate angle between start and end points
-                let theta = dy.atan2(dx);
-
-                // Calculate angle for the arc
-                let phi = if *large_arc {
-                    if *sweep {
-                        theta + std::f64::consts::PI
-                    } else {
-                        theta - std::f64::consts::PI
-                    }
-                } else if *sweep {
-                    theta
-                } else {
-                    theta + std::f64::consts::PI
-                };
-
-                // Calculate point on arc
-                let x = cx + rx * phi.cos() * angle_rad.cos() - ry * phi.sin() * angle_rad.sin();
-                let y = cy + rx * phi.cos() * angle_rad.sin() + ry * phi.sin() * angle_rad.cos();
-
-                Point::new(x, y)
+                panic!("Arc point_at not implemented yet - needs proper elliptical arc parameterization")
             }
         }
     }
@@ -260,6 +229,51 @@ impl BezierSegment {
 
         (best_point, best_t)
     }
+
+    /// Split the bezier segment at parameter t (0 <= t <= 1) using De Casteljau's algorithm
+    pub fn split_at(&self, t: f64) -> (BezierSegment, BezierSegment) {
+        match self {
+            Self::Line { points } => {
+                let [p1, p2] = points;
+                let mid = Point::new(p1.x + t * (p2.x - p1.x), p1.y + t * (p2.y - p1.y));
+                (BezierSegment::line(*p1, mid), BezierSegment::line(mid, *p2))
+            }
+            Self::Cubic { points } => {
+                let [p1, p2, p3, p4] = points;
+                let q1 = Point::new(p1.x + t * (p2.x - p1.x), p1.y + t * (p2.y - p1.y));
+                let q2 = Point::new(p2.x + t * (p3.x - p2.x), p2.y + t * (p3.y - p2.y));
+                let q3 = Point::new(p3.x + t * (p4.x - p3.x), p3.y + t * (p4.y - p3.y));
+                let r1 = Point::new(q1.x + t * (q2.x - q1.x), q1.y + t * (q2.y - q1.y));
+                let r2 = Point::new(q2.x + t * (q3.x - q2.x), q2.y + t * (q3.y - q2.y));
+                let s = Point::new(r1.x + t * (r2.x - r1.x), r1.y + t * (r2.y - r1.y));
+                (
+                    BezierSegment::cubic(*p1, q1, r1, s),
+                    BezierSegment::cubic(s, r2, q3, *p4),
+                )
+            }
+            Self::Quadratic { points } => {
+                let [p1, p2, p3] = points;
+                let q1 = Point::new(p1.x + t * (p2.x - p1.x), p1.y + t * (p2.y - p1.y));
+                let q2 = Point::new(p2.x + t * (p3.x - p2.x), p2.y + t * (p3.y - p2.y));
+                let s = Point::new(q1.x + t * (q2.x - q1.x), q1.y + t * (q2.y - q1.y));
+                (
+                    BezierSegment::quadratic(*p1, q1, s),
+                    BezierSegment::quadratic(s, q2, *p3),
+                )
+            }
+            Self::Arc {
+                start: _,
+                end: _,
+                rx: _,
+                ry: _,
+                angle: _,
+                large_arc: _,
+                sweep: _,
+            } => {
+                panic!("Arc split_at not implemented yet - needs proper elliptical arc splitting")
+            }
+        }
+    }
 }
 
 impl fmt::Display for BezierSegment {
@@ -303,42 +317,38 @@ impl fmt::Display for BezierSegment {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::BezierSegment;
+    use crate::{cubic, pt, quad};
 
     #[test]
     fn test_nearest_point_boundary_cases() {
         // Create a simple cubic bezier segment
-        let segment = BezierSegment::cubic(
-            Point::new(0.0, 0.0), // Start point
-            Point::new(1.0, 1.0), // Control point 1
-            Point::new(2.0, 1.0), // Control point 2
-            Point::new(3.0, 0.0), // End point
-        );
+        let segment = cubic!(pt!(0.0, 0.0), pt!(1.0, 1.0), pt!(2.0, 1.0), pt!(3.0, 0.0));
 
         // Test 1: Point exactly at start (t=0)
-        let test_point = Point::new(0.0, 0.0);
-        let expected_point = Point::new(0.0, 0.0);
+        let test_point = pt!(0.0, 0.0);
+        let expected_point = pt!(0.0, 0.0);
         let (point, t) = segment.nearest_point(&test_point);
         assert_eq!(point, expected_point);
         assert!(t.abs() < 1e-6);
 
         // Test 2: Point very close to start
-        let test_point = Point::new(0.01, 0.01);
-        let expected_point = Point::new(0.0, 0.0);
+        let test_point = pt!(0.01, 0.01);
+        let expected_point = pt!(0.0, 0.0);
         let (point, t) = segment.nearest_point(&test_point);
         assert!(t < 0.1, "t value was {}", t);
         assert!(point.distance(&expected_point) < 0.1);
 
         // Test 3: Point exactly at end (t=1)
-        let test_point = Point::new(3.0, 0.0);
-        let expected_point = Point::new(3.0, 0.0);
+        let test_point = pt!(3.0, 0.0);
+        let expected_point = pt!(3.0, 0.0);
         let (point, t) = segment.nearest_point(&test_point);
         assert_eq!(point, expected_point);
         assert!((t - 1.0).abs() < 1e-6);
 
         // Test 4: Point very close to end
-        let test_point = Point::new(2.99, 0.01);
-        let expected_point = Point::new(3.0, 0.0);
+        let test_point = pt!(2.99, 0.01);
+        let expected_point = pt!(3.0, 0.0);
         let (point, t) = segment.nearest_point(&test_point);
         assert!(t > 0.9, "t value was {}", t);
         assert!(point.distance(&expected_point) < 0.1);
@@ -347,12 +357,7 @@ mod tests {
     #[test]
     fn test_nearest_point_middle_cases() {
         // Create a simple cubic bezier segment
-        let segment = BezierSegment::cubic(
-            Point::new(0.0, 0.0), // Start point
-            Point::new(1.0, 1.0), // Control point 1
-            Point::new(2.0, 1.0), // Control point 2
-            Point::new(3.0, 0.0), // End point
-        );
+        let segment = cubic!(pt!(0.0, 0.0), pt!(1.0, 1.0), pt!(2.0, 1.0), pt!(3.0, 0.0));
 
         // Test 1: Point at middle of curve (t=0.5)
         let middle_point = segment.point_at(0.5);
@@ -363,12 +368,12 @@ mod tests {
         assert!(point.distance(&expected_point) < 1e-6);
 
         // Test 2: Point above middle of curve
-        let test_point = Point::new(1.5, 2.0);
+        let test_point = pt!(1.5, 2.0);
         let (_point, t) = segment.nearest_point(&test_point);
         assert!(t > 0.4 && t < 0.6, "t value was {}", t);
 
         // Test 3: Point below middle of curve
-        let test_point = Point::new(1.5, 0.5);
+        let test_point = pt!(1.5, 0.5);
         let (_point, t) = segment.nearest_point(&test_point);
         assert!(t > 0.4 && t < 0.6, "t value was {}", t);
     }
@@ -376,26 +381,92 @@ mod tests {
     #[test]
     fn test_nearest_point_complex_curve() {
         // Create a more complex cubic bezier segment
-        let segment = BezierSegment::cubic(
-            Point::new(0.0, 0.0),  // Start point
-            Point::new(0.5, 1.0),  // Control point 1
-            Point::new(1.5, -1.0), // Control point 2
-            Point::new(2.0, 0.0),  // End point
-        );
+        let segment = cubic!(pt!(0.0, 0.0), pt!(0.5, 1.0), pt!(1.5, -1.0), pt!(2.0, 0.0));
 
         // Test 1: Point near a local minimum
-        let test_point = Point::new(1.0, 0.2);
+        let test_point = pt!(1.0, 0.2);
         let (_point, t) = segment.nearest_point(&test_point);
         assert!(t > 0.45 && t < 0.55, "t value was {}", t);
 
         // Test 2: Point near a local maximum
-        let test_point = Point::new(0.5, 0.5);
+        let test_point = pt!(0.5, 0.5);
         let (_point, t) = segment.nearest_point(&test_point);
         assert!(t > 0.24 && t < 0.26, "t value was {}", t);
 
         // Test 3: Point outside the curve's bounding box
-        let test_point = Point::new(3.0, 2.0);
+        let test_point = pt!(3.0, 2.0);
         let (_point, t) = segment.nearest_point(&test_point);
         assert!(t > 0.9, "t value was {}", t);
+    }
+
+    #[test]
+    fn test_split_at_line() {
+        let segment = crate::line!(pt!(0.0, 0.0), pt!(10.0, 10.0));
+        let (left, right) = segment.split_at(0.5);
+
+        match (left, right) {
+            (
+                BezierSegment::Line {
+                    points: left_points,
+                },
+                BezierSegment::Line {
+                    points: right_points,
+                },
+            ) => {
+                assert_eq!(left_points[0], pt!(0.0, 0.0));
+                assert_eq!(left_points[1], pt!(5.0, 5.0));
+                assert_eq!(right_points[0], pt!(5.0, 5.0));
+                assert_eq!(right_points[1], pt!(10.0, 10.0));
+            }
+            _ => panic!("Expected line segments"),
+        }
+    }
+
+    #[test]
+    fn test_split_at_cubic() {
+        let segment = cubic!(pt!(0.0, 0.0), pt!(1.0, 1.0), pt!(2.0, 1.0), pt!(3.0, 0.0));
+        let (left, right) = segment.split_at(0.5);
+
+        match (left, right) {
+            (
+                BezierSegment::Cubic {
+                    points: left_points,
+                },
+                BezierSegment::Cubic {
+                    points: right_points,
+                },
+            ) => {
+                // Check that the split point is the same for both segments
+                assert_eq!(left_points[3], right_points[0]);
+                // Check that the original endpoints are preserved
+                assert_eq!(left_points[0], pt!(0.0, 0.0));
+                assert_eq!(right_points[3], pt!(3.0, 0.0));
+            }
+            _ => panic!("Expected cubic segments"),
+        }
+    }
+
+    #[test]
+    fn test_split_at_quadratic() {
+        let segment = quad!(pt!(0.0, 0.0), pt!(1.0, 1.0), pt!(2.0, 0.0));
+        let (left, right) = segment.split_at(0.5);
+
+        match (left, right) {
+            (
+                BezierSegment::Quadratic {
+                    points: left_points,
+                },
+                BezierSegment::Quadratic {
+                    points: right_points,
+                },
+            ) => {
+                // Check that the split point is the same for both segments
+                assert_eq!(left_points[2], right_points[0]);
+                // Check that the original endpoints are preserved
+                assert_eq!(left_points[0], pt!(0.0, 0.0));
+                assert_eq!(right_points[2], pt!(2.0, 0.0));
+            }
+            _ => panic!("Expected quadratic segments"),
+        }
     }
 }
