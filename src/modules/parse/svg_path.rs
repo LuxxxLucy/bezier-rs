@@ -2,6 +2,7 @@ use crate::curve;
 use crate::data::{BezierCurve, BezierSegment, Point};
 use crate::{cubic, line, pt, quad};
 use std::error::Error; // Import macros
+use std::fmt;
 
 /// A generic parsing entity that tracks position and length in a string
 struct ParsingEntity {
@@ -39,18 +40,51 @@ pub trait FromSvgPath: Sized {
 
 impl FromSvgPath for BezierCurve {
     fn from_svg_path(data: &str) -> Result<Self, Box<dyn Error>> {
+        let (result, _) = Self::parse_one_svg_path(data)?;
+        Ok(result)
+    }
+}
+
+/// Custom error for SVG path parsing
+#[derive(Debug)]
+pub enum SvgPathParseError {
+    MultiplePaths { bytes_consumed: usize },
+    Other(Box<dyn Error>),
+}
+
+impl fmt::Display for SvgPathParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SvgPathParseError::MultiplePaths { bytes_consumed } => {
+                write!(
+                    f,
+                    "it seems it has multiple path, bytes_consumed={}",
+                    bytes_consumed
+                )
+            }
+            SvgPathParseError::Other(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl Error for SvgPathParseError {}
+
+impl BezierCurve {
+    /// Parse a single SVG path and return both the result and bytes consumed
+    pub fn parse_one_svg_path(data: &str) -> Result<(Self, usize), Box<dyn Error>> {
         let mut segments = vec![];
         let mut current_point = pt!(0.0, 0.0);
         let mut start_point = current_point;
-        let mut is_closed = false;
         let mut current_command = ' ';
         let mut last_was_move = false; // Track if the last command was a move
+        let mut bytes_consumed = 0;
 
         let mut numbers = vec![];
         let mut current_number = ParsingEntity::new();
 
-        // Process each character
-        for (i, c) in data.chars().enumerate() {
+        let chars = data.char_indices();
+        for (i, c) in chars {
+            bytes_consumed = i + c.len_utf8();
             match c {
                 'M' | 'm' | 'C' | 'c' | 'Q' | 'q' | 'L' | 'l' | 'H' | 'h' | 'V' | 'v' | 'S'
                 | 's' | 'Z' | 'z' | 'A' | 'a' | 'T' | 't' => {
@@ -61,7 +95,6 @@ impl FromSvgPath for BezierCurve {
                         }
                         current_number.reset();
                     }
-
                     // Process previous command's numbers
                     if !numbers.is_empty() {
                         process_command(
@@ -73,6 +106,38 @@ impl FromSvgPath for BezierCurve {
                             &mut last_was_move,
                         )?;
                         numbers.clear();
+                    }
+
+                    // Special handling for Z/z
+                    if c == 'Z' || c == 'z' {
+                        // Handle Z command
+                        if current_point != start_point {
+                            segments.push(line!(current_point, start_point));
+                        }
+                        // Return immediately after Z/z
+                        // bytes_consumed should include this Z/z
+                        bytes_consumed = i + c.len_utf8();
+                        // If there are no segments, return an empty curve
+                        if segments.is_empty() {
+                            if bytes_consumed != data.len() {
+                                return Err(Box::new(SvgPathParseError::MultiplePaths {
+                                    bytes_consumed,
+                                }));
+                            }
+                            return Ok((curve!([]), bytes_consumed));
+                        }
+                        let curve = BezierCurve::new_closed(segments).ok_or_else(|| {
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Failed to create closed curve",
+                            ))
+                        })?;
+                        if bytes_consumed != data.len() {
+                            return Err(Box::new(SvgPathParseError::MultiplePaths {
+                                bytes_consumed,
+                            }));
+                        }
+                        return Ok((curve, bytes_consumed));
                     }
 
                     current_command = c;
@@ -168,24 +233,105 @@ impl FromSvgPath for BezierCurve {
             )?;
         }
 
-        // Handle Z command if it was the last one
-        if current_command == 'Z' || current_command == 'z' {
-            if current_point != start_point {
-                segments.push(line!(current_point, start_point));
-            }
-            is_closed = true;
-        }
-
         // If there are no segments, return an empty curve
         if segments.is_empty() {
-            return Ok(curve!([]));
+            if bytes_consumed != data.len() {
+                return Err(Box::new(SvgPathParseError::MultiplePaths {
+                    bytes_consumed,
+                }));
+            }
+            Ok((curve!([]), bytes_consumed))
+        } else {
+            if bytes_consumed != data.len() {
+                return Err(Box::new(SvgPathParseError::MultiplePaths {
+                    bytes_consumed,
+                }));
+            }
+            Ok((curve!(segments), bytes_consumed))
+        }
+    }
+
+    // Helper function to parse one SVG path, ignoring the 'multiple paths' error
+    fn parse_one_svg_path_ignore_multiple(data: &str) -> Result<(Self, usize), Box<dyn Error>> {
+        match Self::parse_one_svg_path(data) {
+            Ok(result) => Ok(result),
+            Err(e) => {
+                if let Some(mp) = e.downcast_ref::<SvgPathParseError>() {
+                    match mp {
+                        SvgPathParseError::MultiplePaths { bytes_consumed } => {
+                            let (curve, _) = Self::parse_one_svg_path(&data[..*bytes_consumed])?;
+                            Ok((curve, *bytes_consumed))
+                        }
+                        SvgPathParseError::Other(_) => Err(e),
+                    }
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// Parse potentially multiple SVG paths separated by Z commands
+    ///
+    /// This function is designed to handle SVG path data that may contain multiple paths
+    /// separated by Z/z (closepath) commands. It will parse each path individually and
+    /// return a vector of curves.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bezier_rs::BezierCurve;
+    ///
+    /// // Parse a single path with cubic Bézier curve
+    /// let single_path = "M 10,10 C 20,20 40,20 50,10 Z";
+    /// let curves = BezierCurve::parse_maybe_multiple(single_path).unwrap();
+    /// assert_eq!(curves.len(), 1);
+    /// assert_eq!(curves[0].segments.len(), 2);
+    ///
+    /// // Parse multiple paths with cubic Bézier curves
+    /// let multiple_paths = "M 10,10 C 20,20 40,20 50,10 Z M 30,30 C 40,40 50,50 60,60 Z";
+    /// let curves = BezierCurve::parse_maybe_multiple(multiple_paths).unwrap();
+    /// assert_eq!(curves.len(), 2);
+    /// assert_eq!(curves[0].segments.len(), 2);
+    /// assert_eq!(curves[1].segments.len(), 2);
+    /// ```
+    ///
+    /// # Notes
+    ///
+    /// - Each path must end with a Z/z command to be properly separated
+    /// - If a path doesn't end with Z/z, it will be treated as a single path
+    /// - Use this function when you expect multiple paths in the input
+    /// - For single paths, consider using `parse_one_svg_path` instead
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The path data is invalid
+    /// - A path command is malformed
+    /// - The path cannot be parsed into valid curves
+    pub fn parse_maybe_multiple(data: &str) -> Result<Vec<Self>, Box<dyn Error>> {
+        let mut curves = Vec::new();
+        let mut remaining = data;
+
+        while !remaining.is_empty() {
+            let (curve, consumed) = Self::parse_one_svg_path_ignore_multiple(remaining)?;
+            curves.push(curve);
+
+            // Skip any whitespace after the consumed bytes
+            let mut next_start = consumed;
+            while next_start < remaining.len()
+                && remaining[next_start..]
+                    .chars()
+                    .next()
+                    .map_or(false, |c| c.is_whitespace())
+            {
+                next_start += remaining[next_start..].chars().next().unwrap().len_utf8();
+            }
+
+            remaining = &remaining[next_start..];
         }
 
-        if is_closed {
-            BezierCurve::new_closed(segments).ok_or_else(|| "Failed to create closed curve".into())
-        } else {
-            Ok(curve!(segments))
-        }
+        Ok(curves)
     }
 }
 
@@ -515,7 +661,7 @@ mod tests {
     // Helper function to run test cases
     fn run_test_cases(test_cases: &[(&str, &str, Vec<BezierSegment>)]) {
         for (test_name, path, expected_segments) in test_cases.iter() {
-            let curve = BezierCurve::from_svg_path(path)
+            let (curve, bytes_consumed) = BezierCurve::parse_one_svg_path(path)
                 .unwrap_or_else(|e| panic!("Failed to parse path in test '{}': {}", test_name, e));
 
             let expected_curve = curve!(expected_segments.to_vec());
@@ -526,6 +672,14 @@ mod tests {
                 path,
                 curve,
                 expected_curve
+            );
+
+            assert!(
+                bytes_consumed == path.len(),
+                "Wrong bytes consumed in test '{}', expected {} but got {}",
+                test_name,
+                path.len(),
+                bytes_consumed
             );
         }
     }
@@ -974,5 +1128,62 @@ mod tests {
             ),
         ];
         run_test_cases(&test_cases);
+    }
+
+    #[test]
+    fn test_parse_multiple_paths() {
+        let input = "M 10,10 C 20,20 40,20 50,10 Z M 30,30 C 40,40 50,50 60,60 Z";
+        let curves = BezierCurve::parse_maybe_multiple(input).unwrap();
+
+        // Verify we got two curves
+        assert_eq!(curves.len(), 2, "Expected 2 curves, got {}", curves.len());
+
+        // First path should be a closed line
+        assert_eq!(
+            curves[0].segments.len(),
+            2,
+            "First curve should have 2 segment"
+        );
+        assert!(
+            curves[0].segments[0]
+                == cubic!([(10.0, 10.0), (20.0, 20.0), (40.0, 20.0), (50.0, 10.0)])
+        );
+        assert!(curves[0].is_closed(), "First curve should be closed");
+
+        // Second path should be a closed line
+        assert_eq!(
+            curves[1].segments.len(),
+            2,
+            "Second curve should have 2 segment"
+        );
+        assert!(
+            curves[1].segments[0]
+                == cubic!([(30.0, 30.0), (40.0, 40.0), (50.0, 50.0), (60.0, 60.0)])
+        );
+        assert!(curves[1].is_closed(), "Second curve should be closed");
+
+        // Test case for relative coordinates with multiple subpaths
+        let complex_input = "m 842.88566,3568.9387 2.92314,-5.5685 6.92066,0.8095 5.31975,-10.1339 -4.66022,-5.1155 2.85051,-5.4301 20.1684,23.183 -2.84143,5.4128 z m 14.97766,-4.1596 11.24133,1.4452 -7.6101,-8.3625 z";
+        let complex_curves = BezierCurve::parse_maybe_multiple(complex_input).unwrap();
+
+        // Verify we got two curves
+        assert_eq!(
+            complex_curves.len(),
+            2,
+            "Expected 2 curves for complex input, got {}",
+            complex_curves.len()
+        );
+
+        // First path should be closed
+        assert!(
+            complex_curves[0].is_closed(),
+            "First complex curve should be closed"
+        );
+
+        // Second path should be closed
+        assert!(
+            complex_curves[1].is_closed(),
+            "Second complex curve should be closed"
+        );
     }
 }

@@ -5,7 +5,7 @@ use crate::data::segment::BezierSegment;
 use std::fmt;
 
 /// A Bezier curve consisting of one or more Bezier segments
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq)] // we deliberately don't derive Debug
 pub struct BezierCurve {
     /// The segments that make up this curve
     pub segments: Vec<BezierSegment>,

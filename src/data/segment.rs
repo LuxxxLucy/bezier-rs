@@ -4,7 +4,7 @@ use crate::data::point::Point;
 use std::fmt;
 
 /// A bezier segment, either cubic or quadratic
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq)] // we deliberately don't derive Debug
 pub enum BezierSegment {
     /// Line segment with 2 points
     Line {
