@@ -1,1 +1,1 @@
-pub mod smt_cmp;
+pub mod smt_eq;
